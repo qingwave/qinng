@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 3.9.0">
+  <link rel="icon" type="image/png" sizes="32x32" href="/medias/favicon.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/medias/favicon.png">
+  <meta name="google-site-verification" content="googledbe9fc5bea9bf603.html">
+  <meta name="baidu-site-verification" content="muFp3xopwC">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"qingwave.github.io","root":"/","scheme":"Mist","version":"7.8.0","exturl":false,"sidebar":{"position":"right","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":"gitalk","storage":true,"lazyload":false,"nav":null,"activeClass":"gitalk"},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="在容器平台上我们提供了zk做白名单功能，Pod启动时 sidecar会自动注册zk。昨天遇到zk server抖动，sidecar容器输出大量StateDisconnected事件，zk正常后仍无法恢复，由于大量日志造成sidecar容器 cpu占用过高，进而引发dockerdcpu占用过高，严重时影响dockerd正常调用。">
+<meta name="keywords" content="golang,zk">
+<meta property="og:type" content="article">
+<meta property="og:title" content="golang zk大量disconnected event">
+<meta property="og:url" content="https://qingwave.github.io/golang-zk-statedisconnected/index.html">
+<meta property="og:site_name" content="Qinng">
+<meta property="og:description" content="在容器平台上我们提供了zk做白名单功能，Pod启动时 sidecar会自动注册zk。昨天遇到zk server抖动，sidecar容器输出大量StateDisconnected事件，zk正常后仍无法恢复，由于大量日志造成sidecar容器 cpu占用过高，进而引发dockerdcpu占用过高，严重时影响dockerd正常调用。">
+<meta property="og:locale" content="zh-CN">
+<meta property="og:updated_time" content="2021-08-12T01:18:39.065Z">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="golang zk大量disconnected event">
+<meta name="twitter:description" content="在容器平台上我们提供了zk做白名单功能，Pod启动时 sidecar会自动注册zk。昨天遇到zk server抖动，sidecar容器输出大量StateDisconnected事件，zk正常后仍无法恢复，由于大量日志造成sidecar容器 cpu占用过高，进而引发dockerdcpu占用过高，严重时影响dockerd正常调用。">
+
+<link rel="canonical" href="https://qingwave.github.io/golang-zk-statedisconnected/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>golang zk大量disconnected event | Qinng</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+<link rel="stylesheet" href="/css/prism-tomorrow.css" type="text/css">
+<link rel="stylesheet" href="/css/prism-line-numbers.css" type="text/css"></head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">Qinng</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">Qinng</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i></a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i></a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="https://qingwave.github.io/golang-zk-statedisconnected/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="Qinng">
+      <meta itemprop="description" content="Coding, Reading and Daydreaming">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="Qinng">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          golang zk大量disconnected event
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2021-03-02 17:16:23" itemprop="dateCreated datePublished" datetime="2021-03-02T17:16:23+08:00">2021-03-02</time>
+            </span>
+              <span class="post-meta-item">
+                <span class="post-meta-item-icon">
+                  <i class="far fa-calendar-check"></i>
+                </span>
+                <span class="post-meta-item-text">更新于</span>
+                <time title="修改时间：2021-08-12 09:18:39" itemprop="dateModified" datetime="2021-08-12T09:18:39+08:00">2021-08-12</time>
+              </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/coding/" itemprop="url" rel="index"><span itemprop="name">coding</span></a>
+                </span>
+            </span>
+
+          
+            <span class="post-meta-item" title="阅读次数" id="busuanzi_container_page_pv" style="display: none;">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-eye"></i>
+              </span>
+              <span class="post-meta-item-text">阅读次数：</span>
+              <span id="busuanzi_value_page_pv"></span>
+            </span>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <h2 id="背景"><a href="#背景" class="headerlink" title="背景"></a>背景</h2><p>在容器平台上我们提供了<code>zk</code>做白名单功能，<code>Pod</code>启动时 sidecar会自动注册<code>zk</code>。昨天遇到<code>zk server</code>抖动，<code>sidecar</code>容器输出大量<code>StateDisconnected</code>事件，zk正常后仍无法恢复，由于大量日志造成<code>sidecar</code>容器 cpu占用过高，进而引发<code>dockerd</code>cpu占用过高，严重时影响dockerd正常调用。</p>
+<h2 id="问题分析"><a href="#问题分析" class="headerlink" title="问题分析"></a>问题分析</h2><h3 id="问题复现"><a href="#问题复现" class="headerlink" title="问题复现"></a>问题复现</h3><p>正常情况下，<code>sidecar</code>启动后会去注册<code>zk</code>：<br><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># docker logs -f 01a1a4a74785</span></span><br><span class="line">I0302 15:04:05.476463       1 manager.go:116] start run plugin zk</span><br><span class="line">2021/03/02 15:04:05 Connected to 10.38.161.60:11000</span><br><span class="line">I0302 15:04:05.488006       1 zk.go:152] zookeeper connect succeed: zk.srv:11000</span><br><span class="line">2021/03/02 15:04:05 authenticated: id=33746806328105493, timeout=30000</span><br><span class="line">2021/03/02 15:04:05 re-submitting `0` credentials after reconnect</span><br><span class="line">I0302 15:04:05.516446       1 zk.go:220] watching zk node:[/tasks/cluster.xxx_default_deployment.htool/10.46.12.72] <span class="keyword">in</span> cluster[xxx] <span class="comment">#注册成功，开始watch</span></span><br></pre></td></tr></table></figure></p>
+<p>通过<code>iptable</code>s来模拟异常，首先进入到容器<code>network namesapce</code><br><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">pod=htool-6875bcb898-w7llc</span><br><span class="line">containerid=$(docker ps |grep <span class="variable">$pod</span>|awk <span class="string">'&#123;print $1&#125;'</span>|head -n 1)</span><br><span class="line">pid=$(docker inspect -f &#123;&#123;.State.Pid&#125;&#125; <span class="variable">$containerid</span>)</span><br><span class="line">nsenter -n --target <span class="variable">$pid</span></span><br></pre></td></tr></table></figure></p>
+<p>使用<code>iptables</code> <code>drop</code>掉发往<code>zk</code>的请求(11000为zk server端口)<br><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">iptables -A OUTPUT -p tcp -m tcp --dport 11000 -j DROP</span><br></pre></td></tr></table></figure></p>
+<p>zk client自动重试（1s一次），日志显示<code>Failed to connect to 10.38.161.54:11000: dial tcp 10.38.161.54:11000: i/o timeout</code><br><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">I0302 15:04:05.516446       1 zk.go:220] watching zk node:[/tasks/cluster.xxx_default_deployment.htool/10.46.12.72] <span class="keyword">in</span> cluster[xxx]</span><br><span class="line">2021/03/02 15:08:55 recv loop terminated: err=failed to <span class="built_in">read</span> from connection: <span class="built_in">read</span> tcp 10.46.12.72:36884-&gt;10.38.161.60:11000: i/o timeout</span><br><span class="line">2021/03/02 15:08:55 send loop terminated: err=&lt;nil&gt;</span><br><span class="line">2021/03/02 15:08:56 Failed to connect to 10.38.161.54:11000: dial tcp 10.38.161.54:11000: i/o timeout</span><br></pre></td></tr></table></figure></p>
+<p>网络恢复，删除<code>iptables</code><br><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">iptables -D OUTPUT -p tcp -m tcp --dport 11000 -j DROP</span><br></pre></td></tr></table></figure></p>
+<p>出现大量<code>StateDisconnected</code>日志<br><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">I0302 15:09:50.951897       1 zk.go:232] Unknown zk event[StateDisconnected] <span class="keyword">for</span> znode:[/tasks/cluster.xxx_default_deployment.htool/10.46.12.72]</span><br><span class="line">I0302 15:09:50.951893       1 zk.go:232] Unknown zk event[StateDisconnected] <span class="keyword">for</span> znode:[/tasks/cluster.xxx_default_deployment.htool/10.46.12.72]</span><br><span class="line">...</span><br></pre></td></tr></table></figure></p>
+<h3 id="问题分析-1"><a href="#问题分析-1" class="headerlink" title="问题分析"></a>问题分析</h3><p><code>sidecar</code>中zk watch代码如下：<br><figure class="highlight golang"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">exist, _, eventCh, err := conn.ExistsW(node) <span class="comment">//监听zk事件</span></span><br><span class="line">watcher:</span><br><span class="line">        <span class="keyword">for</span> &#123;</span><br><span class="line">                <span class="keyword">select</span> &#123;</span><br><span class="line">                <span class="keyword">case</span> e := &lt;-eventCh:</span><br><span class="line">                        <span class="keyword">switch</span> e.State &#123;</span><br><span class="line">                        <span class="keyword">case</span> zk.StateExpired:</span><br><span class="line">                                <span class="keyword">return</span> fmt.Errorf(<span class="string">"node[%v] expired"</span>, node)</span><br><span class="line">                        <span class="keyword">case</span> zk.StateConnected, zk.StateHasSession:</span><br><span class="line">                                <span class="keyword">return</span> fmt.Errorf(<span class="string">"Get zk event: %v "</span>, e.State)</span><br><span class="line">                        <span class="keyword">default</span>:</span><br><span class="line">                                klog.Infof(<span class="string">"Get zk event[%v] for znode:[%v]"</span>, e.State, node) <span class="comment">// 出错位置</span></span><br><span class="line">                        &#125;</span><br><span class="line">                <span class="keyword">case</span> &lt;-ctx.Done():</span><br><span class="line">                        <span class="comment">// we close the conn in caller</span></span><br><span class="line">                        <span class="keyword">break</span> watcher</span><br><span class="line">                &#125;</span><br><span class="line">        &#125;</span><br></pre></td></tr></table></figure></p>
+<p><code>ExistsW</code>函数由<code>github.com/samuel/go-zookeeper/zk</code>库提供，监听zk给定目录的事件<br><figure class="highlight golang"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(c *Conn)</span> <span class="title">ExistsW</span><span class="params">(path <span class="keyword">string</span>)</span> <span class="params">(<span class="keyword">bool</span>, *Stat, &lt;-<span class="keyword">chan</span> Event, error)</span></span> &#123;</span><br><span class="line">    <span class="keyword">var</span> ech &lt;-<span class="keyword">chan</span> Event</span><br><span class="line">    ...</span><br><span class="line">    ech = c.addWatcher(path, watchTypeData)</span><br><span class="line">    <span class="keyword">return</span> exists, &amp;res.Stat, ech, err</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure></p>
+<p>当zk异常恢复后，<code>c.addWatcher</code>中的<code>channel</code>被<code>close</code>，即<code>sidecar</code>中<code>eventCh</code>关闭，进入死循环。</p>
+<h3 id="修复验证"><a href="#修复验证" class="headerlink" title="修复验证"></a>修复验证</h3><p>知道了原因，修复很简单，判断下eventCh状态即可<br><figure class="highlight golang"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">for</span> &#123;</span><br><span class="line">    <span class="keyword">select</span> &#123;</span><br><span class="line">    <span class="keyword">case</span> e, ok := &lt;-eventCh:</span><br><span class="line">        <span class="keyword">if</span> !ok &#123;</span><br><span class="line">            <span class="keyword">return</span> fmt.Errorf(<span class="string">"event channel closed"</span>)</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> e.Err != <span class="literal">nil</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> fmt.Errorf(<span class="string">"Get zk event: %v, err: %v"</span>, e.State, e.Err)</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">switch</span> e.State &#123;</span><br><span class="line">        <span class="keyword">case</span> zk.StateExpired:</span><br><span class="line">            <span class="keyword">return</span> fmt.Errorf(<span class="string">"node[%v] expired"</span>, node)</span><br><span class="line">        <span class="keyword">case</span> zk.StateConnected, zk.StateHasSession:</span><br><span class="line">            <span class="keyword">return</span> fmt.Errorf(<span class="string">"Get zk event: %v "</span>, e.State)</span><br><span class="line">        <span class="keyword">default</span>:</span><br><span class="line">            klog.Infof(<span class="string">"Get zk event[%v] for znode:[%v]"</span>, e.State, node)</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure></p>
+<p>在修复代码后，再次验证可正常注册<br><figure class="highlight golang"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="number">2021</span>/<span class="number">03</span>/<span class="number">02</span> <span class="number">15</span>:<span class="number">13</span>:<span class="number">40</span> Failed to connect to <span class="number">10.38</span><span class="number">.161</span><span class="number">.60</span>:<span class="number">11000</span>: dial tcp <span class="number">10.38</span><span class="number">.161</span><span class="number">.60</span>:<span class="number">11000</span>: i/o timeout</span><br><span class="line"><span class="number">2021</span>/<span class="number">03</span>/<span class="number">02</span> <span class="number">15</span>:<span class="number">13</span>:<span class="number">40</span> Connected to <span class="number">10.38</span><span class="number">.161</span><span class="number">.55</span>:<span class="number">11000</span></span><br><span class="line"><span class="number">2021</span>/<span class="number">03</span>/<span class="number">02</span> <span class="number">15</span>:<span class="number">13</span>:<span class="number">40</span> authentication failed: zk: session has been expired by the server</span><br><span class="line">W0302 <span class="number">15</span>:<span class="number">13</span>:<span class="number">40.222923</span>       <span class="number">1</span> zk.<span class="keyword">go</span>:<span class="number">300</span>] meet error when watching node path: Get zk event: StateDisconnected, err: zk: session has been expired by the server</span><br><span class="line"><span class="number">2021</span>/<span class="number">03</span>/<span class="number">02</span> <span class="number">15</span>:<span class="number">13</span>:<span class="number">40</span> Connected to <span class="number">10.38</span><span class="number">.161</span><span class="number">.54</span>:<span class="number">11000</span></span><br><span class="line"><span class="number">2021</span>/<span class="number">03</span>/<span class="number">02</span> <span class="number">15</span>:<span class="number">13</span>:<span class="number">40</span> authenticated: id=<span class="number">177861994644216038</span>, timeout=<span class="number">30000</span></span><br><span class="line"><span class="number">2021</span>/<span class="number">03</span>/<span class="number">02</span> <span class="number">15</span>:<span class="number">13</span>:<span class="number">40</span> re-submitting <span class="string">`1`</span> credentials after reconnect</span><br><span class="line">I0302 <span class="number">15</span>:<span class="number">13</span>:<span class="number">41.238524</span>       <span class="number">1</span> zk.<span class="keyword">go</span>:<span class="number">220</span>] watching zk node:[/tasks/cluster.xxx_default_deployment.htool/<span class="number">10.46</span><span class="number">.12</span><span class="number">.72</span>] in cluster[xxx]</span><br></pre></td></tr></table></figure></p>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>这个问题其实与<code>zk</code>没关系，是由于没有判断<code>channel</code>状态，陷入死循环。通常情况下大部分应用只有退出时才会关闭<code>channel</code>，不需要特殊处理。</p>
+
+    </div>
+
+    
+    
+    
+        
+
+<div>
+<ul class="post-copyright">
+  <li class="post-copyright-author">
+    <strong>本文作者： </strong>qinng
+  </li>
+  <li class="post-copyright-link">
+    <strong>本文链接：</strong>
+    <a href="https://qingwave.github.io/golang-zk-statedisconnected/" title="golang zk大量disconnected event">https://qingwave.github.io/golang-zk-statedisconnected/</a>
+  </li>
+  <li class="post-copyright-license">
+    <strong>版权声明： </strong>本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="noopener" target="_blank"><i class="fab fa-fw fa-creative-commons"></i>BY-NC-SA</a> 许可协议。转载请注明出处！
+  </li>
+</ul>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/golang/" rel="tag"># golang</a>
+              <a href="/tags/zk/" rel="tag"># zk</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/sudongpo/" rel="prev" title="也谈苏东坡">
+      <i class="fa fa-chevron-left"></i> 也谈苏东坡
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/docker-shell-signal/" rel="next" title="k8s中shell脚本启动如何传递信号">
+      k8s中shell脚本启动如何传递信号 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+          </div>
+          
+    <div class="comments" id="gitalk-container"></div>
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#背景"><span class="nav-number">1.</span> <span class="nav-text">背景</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#问题分析"><span class="nav-number">2.</span> <span class="nav-text">问题分析</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#问题复现"><span class="nav-number">2.1.</span> <span class="nav-text">问题复现</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#问题分析-1"><span class="nav-number">2.2.</span> <span class="nav-text">问题分析</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#修复验证"><span class="nav-number">2.3.</span> <span class="nav-text">修复验证</span></a></li></ol></li><li class="nav-item nav-level-2"><a class="nav-link" href="#总结"><span class="nav-number">3.</span> <span class="nav-text">总结</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">Qinng</p>
+  <div class="site-description" itemprop="description">Coding, Reading and Daydreaming</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">53</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">27</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+  <div class="links-of-author motion-element">
+      <span class="links-of-author-item">
+        <a href="https://github.com/qingwave" title="GitHub → https://github.com/qingwave" rel="noopener" target="_blank"><i class="fab fa-github fa-fw"></i></a>
+      </span>
+      <span class="links-of-author-item">
+        <a href="mailto:isguory@gmail.com" title="E-Mail → mailto:isguory@gmail.com" rel="noopener" target="_blank"><i class="fa fa-envelope fa-fw"></i></a>
+      </span>
+      <span class="links-of-author-item">
+        <a href="/contact" title="Contact → /contact"><i class="fab fa-flipboard fa-fw"></i></a>
+      </span>
+  </div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 2018 – 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-terminal"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">Qinng</span>
+</div>
+
+        
+<div class="busuanzi-count">
+  <script data-pjax async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+    <span class="post-meta-item" id="busuanzi_container_site_uv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-user"></i>
+      </span>
+      <span class="site-uv" title="总访客量">
+        <span id="busuanzi_value_site_uv"></span>
+      </span>
+    </span>
+    <span class="post-meta-divider">|</span>
+    <span class="post-meta-item" id="busuanzi_container_site_pv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-eye"></i>
+      </span>
+      <span class="site-pv" title="总访问量">
+        <span id="busuanzi_value_site_pv"></span>
+      </span>
+    </span>
+</div>
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/pjax/pjax.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+<script src="/js/utils.js"></script><script src="/js/motion.js"></script>
+<script src="/js/schemes/muse.js"></script>
+<script src="/js/next-boot.js"></script>
+  <script>
+var pjax = new Pjax({
+  selectors: [
+    'head title',
+    '#page-configurations',
+    '.content-wrap',
+    '.post-toc-wrap',
+    '.languages',
+    '#pjax'
+  ],
+  switches: {
+    '.post-toc-wrap': Pjax.switches.innerHTML
+  },
+  analytics: false,
+  cacheBust: false,
+  scrollTo : !CONFIG.bookmark.enable
+});
+
+window.addEventListener('pjax:success', () => {
+  document.querySelectorAll('script[data-pjax], script#page-configurations, #pjax script').forEach(element => {
+    var code = element.text || element.textContent || element.innerHTML || '';
+    var parent = element.parentNode;
+    parent.removeChild(element);
+    var script = document.createElement('script');
+    if (element.id) {
+      script.id = element.id;
+    }
+    if (element.className) {
+      script.className = element.className;
+    }
+    if (element.type) {
+      script.type = element.type;
+    }
+    if (element.src) {
+      script.src = element.src;
+      // Force synchronous loading of peripheral JS.
+      script.async = false;
+    }
+    if (element.dataset.pjax !== undefined) {
+      script.dataset.pjax = '';
+    }
+    if (code !== '') {
+      script.appendChild(document.createTextNode(code));
+    }
+    parent.appendChild(script);
+  });
+  NexT.boot.refresh();
+  // Define Motion Sequence & Bootstrap Motion.
+  if (CONFIG.motion.enable) {
+    NexT.motion.integrator
+      .init()
+      .add(NexT.motion.middleWares.subMenu)
+      .add(NexT.motion.middleWares.postList)
+      .bootstrap();
+  }
+  NexT.utils.updateSidebarPosition();
+});
+</script>
+
+
+
+
+  
+  <script data-pjax>
+    (function(){
+      var canonicalURL, curProtocol;
+      //Get the <link> tag
+      var x=document.getElementsByTagName("link");
+		//Find the last canonical URL
+		if(x.length > 0){
+			for (i=0;i<x.length;i++){
+				if(x[i].rel.toLowerCase() == 'canonical' && x[i].href){
+					canonicalURL=x[i].href;
+				}
+			}
+		}
+    //Get protocol
+	    if (!canonicalURL){
+	    	curProtocol = window.location.protocol.split(':')[0];
+	    }
+	    else{
+	    	curProtocol = canonicalURL.split(':')[0];
+	    }
+      //Get current URL if the canonical URL does not exist
+	    if (!canonicalURL) canonicalURL = window.location.href;
+	    //Assign script content. Replace current URL with the canonical URL
+      !function(){var e=/([http|https]:\/\/[a-zA-Z0-9\_\.]+\.baidu\.com)/gi,r=canonicalURL,t=document.referrer;if(!e.test(r)){var n=(String(curProtocol).toLowerCase() === 'https')?"https://sp0.baidu.com/9_Q4simg2RQJ8t7jm9iCKT-xh_/s.gif":"//api.share.baidu.com/s.gif";t?(n+="?r="+encodeURIComponent(document.referrer),r&&(n+="&l="+r)):r&&(n+="?l="+r);var i=new Image;i.src=n}}(window);})();
+  </script>
+
+
+
+
+  <script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+    <div id="pjax">
+  
+
+  
+
+<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.css">
+
+<script>
+NexT.utils.loadComments(document.querySelector('#gitalk-container'), () => {
+  NexT.utils.getScript('//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js', () => {
+    var gitalk = new Gitalk({
+      clientID    : 'a705189dfc18ec59a7d0',
+      clientSecret: '17415910b55e24cdb8c1c8d72bc992a0457f193b',
+      repo        : 'qingwave.github.io',
+      owner       : 'qingwave',
+      admin       : ['qingwave'],
+      id          : '2021-03-02T17-16-23',
+        language: '',
+      distractionFreeMode: true
+    });
+    gitalk.render('gitalk-container');
+  }, window.Gitalk);
+});
+</script>
+
+    </div>
+</body>
+</html>

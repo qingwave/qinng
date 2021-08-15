@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 3.9.0">
+  <link rel="icon" type="image/png" sizes="32x32" href="/medias/favicon.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/medias/favicon.png">
+  <meta name="google-site-verification" content="googledbe9fc5bea9bf603.html">
+  <meta name="baidu-site-verification" content="muFp3xopwC">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"qingwave.github.io","root":"/","scheme":"Mist","version":"7.8.0","exturl":false,"sidebar":{"position":"right","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":"gitalk","storage":true,"lazyload":false,"nav":null,"activeClass":"gitalk"},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="在Prometheus分区实践中我们介绍了使用集群联邦与远程存储来扩展Prometheus以及监控数据持久化，但之前的分区方案存在一定不足，如分区配置较难维护，全局Prometheus存在性能瓶颈等，本文通过Thanos+Kvass实现更优雅的Prometheus扩展方案。">
+<meta name="keywords" content="prometheus">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Prometheus高可用自动分区方案">
+<meta property="og:url" content="https://qingwave.github.io/prometheus-auto-federation/index.html">
+<meta property="og:site_name" content="Qinng">
+<meta property="og:description" content="在Prometheus分区实践中我们介绍了使用集群联邦与远程存储来扩展Prometheus以及监控数据持久化，但之前的分区方案存在一定不足，如分区配置较难维护，全局Prometheus存在性能瓶颈等，本文通过Thanos+Kvass实现更优雅的Prometheus扩展方案。">
+<meta property="og:locale" content="zh-CN">
+<meta property="og:image" content="https://github.com/tkestack/kvass/raw/master/README.assets/image-20201126031456582.png">
+<meta property="og:image" content="https://github.com/thanos-io/thanos/raw/main/docs/img/arch.jpg">
+<meta property="og:image" content="https://qingwave.github.io/img/blogImg/prometheus-ha.png">
+<meta property="og:image" content="https://qingwave.github.io/img/blogImg/thanos-query.png">
+<meta property="og:updated_time" content="2021-08-12T01:18:39.073Z">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Prometheus高可用自动分区方案">
+<meta name="twitter:description" content="在Prometheus分区实践中我们介绍了使用集群联邦与远程存储来扩展Prometheus以及监控数据持久化，但之前的分区方案存在一定不足，如分区配置较难维护，全局Prometheus存在性能瓶颈等，本文通过Thanos+Kvass实现更优雅的Prometheus扩展方案。">
+<meta name="twitter:image" content="https://github.com/tkestack/kvass/raw/master/README.assets/image-20201126031456582.png">
+
+<link rel="canonical" href="https://qingwave.github.io/prometheus-auto-federation/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>Prometheus高可用自动分区方案 | Qinng</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+<link rel="stylesheet" href="/css/prism-tomorrow.css" type="text/css">
+<link rel="stylesheet" href="/css/prism-line-numbers.css" type="text/css"></head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">Qinng</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">Qinng</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i></a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i></a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="https://qingwave.github.io/prometheus-auto-federation/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="Qinng">
+      <meta itemprop="description" content="Coding, Reading and Daydreaming">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="Qinng">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Prometheus高可用自动分区方案
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2021-03-30 19:07:20" itemprop="dateCreated datePublished" datetime="2021-03-30T19:07:20+08:00">2021-03-30</time>
+            </span>
+              <span class="post-meta-item">
+                <span class="post-meta-item-icon">
+                  <i class="far fa-calendar-check"></i>
+                </span>
+                <span class="post-meta-item-text">更新于</span>
+                <time title="修改时间：2021-08-12 09:18:39" itemprop="dateModified" datetime="2021-08-12T09:18:39+08:00">2021-08-12</time>
+              </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/cloud/" itemprop="url" rel="index"><span itemprop="name">cloud</span></a>
+                </span>
+            </span>
+
+          
+            <span class="post-meta-item" title="阅读次数" id="busuanzi_container_page_pv" style="display: none;">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-eye"></i>
+              </span>
+              <span class="post-meta-item-text">阅读次数：</span>
+              <span id="busuanzi_value_page_pv"></span>
+            </span>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <p>在<a href="/prometheus-federation">Prometheus分区实践</a>中我们介绍了使用集群联邦与远程存储来扩展Prometheus以及监控数据持久化，但之前的分区方案存在一定不足，如分区配置较难维护，全局Prometheus存在性能瓶颈等，本文通过<code>Thanos+Kvass</code>实现更优雅的Prometheus扩展方案。</p>
+<h2 id="自动分区"><a href="#自动分区" class="headerlink" title="自动分区"></a>自动分区</h2><p>之前分区方案依赖Prometheus提供的<code>hashmod</code>方法，通过在配置中指定<code>hash</code>对象与<code>modules</code>进行散列（md5），每个分片只抓取相同job命中的对象，例如我们可以通过对<code>node</code>散列从而对<code>cadvisor</code>、<code>node-exporter</code>等job做分片。</p>
+<p>通过这种方式可以简单的扩展Prometheus，降低其抓取压力，但是显而易见<code>hashmod</code>需要指定散列对象，每个job可能需要配置不同的对象如<code>node</code>、<code>pod</code>、<code>ip</code>等，随着采集对象增多，配置难以维护。直到看见了<a href="https://github.com/tkestack/kvass" target="_blank" rel="noopener">Kvass</a>，Kvass是一个Prometheus横向扩展方案，可以不依赖<code>hashmod</code>动态调整target，支持数千万series规模。</p>
+<p>Kvass核心架构如下：<br><img src="https://github.com/tkestack/kvass/raw/master/README.assets/image-20201126031456582.png" alt="kvass"></p>
+<ul>
+<li><code>Kvass-Coordinator</code>: 加载配置文件并进行服务发现，获取所有target，周期性分配target到<code>kvass-sidecar</code>，以及管理分片负载与扩缩容</li>
+<li><code>Kvass-Sidecar</code>: 根据<code>Coordinator</code>分发的target生成配置，以及代理Prometheus请求</li>
+</ul>
+<p>通过Kvass可实现Prometheus动态横向扩展，而不依赖<code>hashmod</code>，灵活性更高。</p>
+<h2 id="全局查询"><a href="#全局查询" class="headerlink" title="全局查询"></a>全局查询</h2><p>另一个问题是在集群联邦中我们需要一个全局的Prometheus来聚合分区Prometheus的数据，依赖原生的<code>/federate</code>接口，随着数据量增多，全局Prometheus必然会达到性能瓶颈。高可用Prometheus集群解决方案<a href="https://github.com/thanos-io/thanos" target="_blank" rel="noopener">Thanos</a>中提供了全局查询功能，通过<code>Thanos-Query</code>与<code>Thanos-Sidecar</code>可实现查询多个Prometheus的数据，并支持了去重。</p>
+<p>Thanos组件较多，核心架构如下：<br><img src="https://github.com/thanos-io/thanos/raw/main/docs/img/arch.jpg" alt="Thanos"></p>
+<ul>
+<li><code>Thanos Query</code>: 实现了<code>Prometheus API</code>，将来自下游组件提供的数据进行聚合最终返回给查询数据的client (如 grafana)，类似数据库中间件</li>
+<li><code>Thanos Sidecar</code>: 连接Prometheus，将其数据提供给<code>Thanos Query</code>查询，并且可将其上传到对象存储，以供长期存储</li>
+<li><code>Thanos Store Gateway</code>: 将对象存储的数据暴露给<code>Thanos Query</code>去查询</li>
+<li><code>Thanos Ruler</code>: 对监控数据进行评估和告警，还可以计算出新的监控数据，将这些新数据提供给<code>Thanos Query</code>查询并且可上传到对象存储，以供长期存储</li>
+<li><code>Thanos Compact</code>: 将对象存储中的数据进行压缩和降低采样率，加速大时间区间监控数据查询的速度</li>
+</ul>
+<p>借助于Thanos提供的<code>Query</code>与<code>Ruler</code>我们可以实现全局查询与聚合。</p>
+<h2 id="最终方案"><a href="#最终方案" class="headerlink" title="最终方案"></a>最终方案</h2><p><code>Kvass+Thanos</code>可实现Prometheus自动扩展、全局查询，再配合<code>Remote Wirite</code>实现数据支持化，通过Grafana展示监控数据<br><img src="/img/blogImg/prometheus-ha.png" alt="Prometheus-HA"></p>
+<h3 id="测试验证"><a href="#测试验证" class="headerlink" title="测试验证"></a>测试验证</h3><p>所有部署文件见<a href="https://github.com/qingwave/kube-monitor/tree/master/prometheus-kvass" target="_blank" rel="noopener">prometheus-kvass</a><br><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">git <span class="built_in">clone</span> https://github.com/qingwave/kube-monitor.git</span><br><span class="line">kubectl apply -f kube-monitor/prometheus-kvass</span><br></pre></td></tr></table></figure></p>
+<p>结果如下：<br><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">$ kubectl get po</span><br><span class="line">NAME                                 READY   STATUS    RESTARTS   AGE</span><br><span class="line">kvass-coordinator-7f65c546d9-vxgxr   2/2     Running   2          29h</span><br><span class="line">metrics-774949d94d-4btzh             1/1     Running   0          10s</span><br><span class="line">metrics-774949d94d-558gn             1/1     Running   1          29h</span><br><span class="line">metrics-774949d94d-gs8kc             1/1     Running   1          29h</span><br><span class="line">metrics-774949d94d-r85rc             1/1     Running   1          29h</span><br><span class="line">metrics-774949d94d-xhbk9             1/1     Running   0          10s</span><br><span class="line">metrics-774949d94d-z5mwk             1/1     Running   1          29h</span><br><span class="line">prometheus-rep-0-0                   3/3     Running   0          49s</span><br><span class="line">prometheus-rep-0-1                   3/3     Running   0          48s</span><br><span class="line">prometheus-rep-0-2                   3/3     Running   0          19s</span><br><span class="line">thanos-query-b469b648f-ltxth         1/1     Running   0          60s</span><br><span class="line">thanos-rule-0                        1/1     Running   2          25h</span><br></pre></td></tr></table></figure></p>
+<p>Deployment <code>metrics</code>有6个副本，每个生成10045 series，<code>kvass-coordinator</code>配置每个分区最大series为30000，以及Prometheus默认的指标，需要3个Prometheus分片。</p>
+<p>每个分片包含2个target<br><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">prometheus_tsdb_head_chunks&#123;instance=<span class="string">"127.0.0.1:9090"</span>,job=<span class="string">"prometheus_shards"</span>,replicate=<span class="string">"prometheus-rep-0-0"</span>,shard=<span class="string">"0"</span>&#125;	20557</span><br></pre></td></tr></table></figure></p>
+<p>通过<code>Thanos Query</code>可以查询到多个Prometheus分片的数据，以及聚合规则<code>metrics_count</code><br><img src="/img/blogImg/thanos-query.png" alt="thanos-query"></p>
+<h3 id="待优化问题"><a href="#待优化问题" class="headerlink" title="待优化问题"></a>待优化问题</h3><p>此方案可满足绝大部分场景，用户可通过自己的实际环境配合不同的组件，但也存在一些需要优化确认的问题</p>
+<ul>
+<li><code>Thanos Ruler</code>不支持远程写接口，只能存储于Thanos提供的对象存储中</li>
+<li><code>Thanos Query</code>全局查询依赖多个下游组件，可能只返回部分结果挺好使</li>
+<li><code>Coordinator</code>性能需要压测验证</li>
+</ul>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p><code>Kvass+Thanos+Remote-write</code>可以实现Prometheus集群的自动分区、全局查询、数据持久化等功能，满足绝大部分场景。虽然有一些问题需要验证优化，但瑕不掩瑜，能够解决原生Prometheus扩展性问题。</p>
+<h2 id="引用"><a href="#引用" class="headerlink" title="引用"></a>引用</h2><ul>
+<li><a href="https://qingwave.github.io/prometheus-federation/">https://qingwave.github.io/prometheus-federation/</a></li>
+<li><a href="https://github.com/tkestack/kvass" target="_blank" rel="noopener">https://github.com/tkestack/kvass</a></li>
+<li><a href="https://github.com/thanos-io/thanos" target="_blank" rel="noopener">https://github.com/thanos-io/thanos</a></li>
+</ul>
+
+    </div>
+
+    
+    
+    
+        
+
+<div>
+<ul class="post-copyright">
+  <li class="post-copyright-author">
+    <strong>本文作者： </strong>qinng
+  </li>
+  <li class="post-copyright-link">
+    <strong>本文链接：</strong>
+    <a href="https://qingwave.github.io/prometheus-auto-federation/" title="Prometheus高可用自动分区方案">https://qingwave.github.io/prometheus-auto-federation/</a>
+  </li>
+  <li class="post-copyright-license">
+    <strong>版权声明： </strong>本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="noopener" target="_blank"><i class="fab fa-fw fa-creative-commons"></i>BY-NC-SA</a> 许可协议。转载请注明出处！
+  </li>
+</ul>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/prometheus/" rel="tag"># prometheus</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/k8s-hpa-enchance/" rel="prev" title="优化Kubernetes横向扩缩HPA">
+      <i class="fa fa-chevron-left"></i> 优化Kubernetes横向扩缩HPA
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/golang-special-dns-nameserver/" rel="next" title="Golang自定义DNS Nameserver">
+      Golang自定义DNS Nameserver <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+          </div>
+          
+    <div class="comments" id="gitalk-container"></div>
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#自动分区"><span class="nav-number">1.</span> <span class="nav-text">自动分区</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#全局查询"><span class="nav-number">2.</span> <span class="nav-text">全局查询</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#最终方案"><span class="nav-number">3.</span> <span class="nav-text">最终方案</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#测试验证"><span class="nav-number">3.1.</span> <span class="nav-text">测试验证</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#待优化问题"><span class="nav-number">3.2.</span> <span class="nav-text">待优化问题</span></a></li></ol></li><li class="nav-item nav-level-2"><a class="nav-link" href="#总结"><span class="nav-number">4.</span> <span class="nav-text">总结</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#引用"><span class="nav-number">5.</span> <span class="nav-text">引用</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">Qinng</p>
+  <div class="site-description" itemprop="description">Coding, Reading and Daydreaming</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">53</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">27</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+  <div class="links-of-author motion-element">
+      <span class="links-of-author-item">
+        <a href="https://github.com/qingwave" title="GitHub → https://github.com/qingwave" rel="noopener" target="_blank"><i class="fab fa-github fa-fw"></i></a>
+      </span>
+      <span class="links-of-author-item">
+        <a href="mailto:isguory@gmail.com" title="E-Mail → mailto:isguory@gmail.com" rel="noopener" target="_blank"><i class="fa fa-envelope fa-fw"></i></a>
+      </span>
+      <span class="links-of-author-item">
+        <a href="/contact" title="Contact → /contact"><i class="fab fa-flipboard fa-fw"></i></a>
+      </span>
+  </div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 2018 – 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-terminal"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">Qinng</span>
+</div>
+
+        
+<div class="busuanzi-count">
+  <script data-pjax async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+    <span class="post-meta-item" id="busuanzi_container_site_uv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-user"></i>
+      </span>
+      <span class="site-uv" title="总访客量">
+        <span id="busuanzi_value_site_uv"></span>
+      </span>
+    </span>
+    <span class="post-meta-divider">|</span>
+    <span class="post-meta-item" id="busuanzi_container_site_pv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-eye"></i>
+      </span>
+      <span class="site-pv" title="总访问量">
+        <span id="busuanzi_value_site_pv"></span>
+      </span>
+    </span>
+</div>
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/pjax/pjax.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+<script src="/js/utils.js"></script><script src="/js/motion.js"></script>
+<script src="/js/schemes/muse.js"></script>
+<script src="/js/next-boot.js"></script>
+  <script>
+var pjax = new Pjax({
+  selectors: [
+    'head title',
+    '#page-configurations',
+    '.content-wrap',
+    '.post-toc-wrap',
+    '.languages',
+    '#pjax'
+  ],
+  switches: {
+    '.post-toc-wrap': Pjax.switches.innerHTML
+  },
+  analytics: false,
+  cacheBust: false,
+  scrollTo : !CONFIG.bookmark.enable
+});
+
+window.addEventListener('pjax:success', () => {
+  document.querySelectorAll('script[data-pjax], script#page-configurations, #pjax script').forEach(element => {
+    var code = element.text || element.textContent || element.innerHTML || '';
+    var parent = element.parentNode;
+    parent.removeChild(element);
+    var script = document.createElement('script');
+    if (element.id) {
+      script.id = element.id;
+    }
+    if (element.className) {
+      script.className = element.className;
+    }
+    if (element.type) {
+      script.type = element.type;
+    }
+    if (element.src) {
+      script.src = element.src;
+      // Force synchronous loading of peripheral JS.
+      script.async = false;
+    }
+    if (element.dataset.pjax !== undefined) {
+      script.dataset.pjax = '';
+    }
+    if (code !== '') {
+      script.appendChild(document.createTextNode(code));
+    }
+    parent.appendChild(script);
+  });
+  NexT.boot.refresh();
+  // Define Motion Sequence & Bootstrap Motion.
+  if (CONFIG.motion.enable) {
+    NexT.motion.integrator
+      .init()
+      .add(NexT.motion.middleWares.subMenu)
+      .add(NexT.motion.middleWares.postList)
+      .bootstrap();
+  }
+  NexT.utils.updateSidebarPosition();
+});
+</script>
+
+
+
+
+  
+  <script data-pjax>
+    (function(){
+      var canonicalURL, curProtocol;
+      //Get the <link> tag
+      var x=document.getElementsByTagName("link");
+		//Find the last canonical URL
+		if(x.length > 0){
+			for (i=0;i<x.length;i++){
+				if(x[i].rel.toLowerCase() == 'canonical' && x[i].href){
+					canonicalURL=x[i].href;
+				}
+			}
+		}
+    //Get protocol
+	    if (!canonicalURL){
+	    	curProtocol = window.location.protocol.split(':')[0];
+	    }
+	    else{
+	    	curProtocol = canonicalURL.split(':')[0];
+	    }
+      //Get current URL if the canonical URL does not exist
+	    if (!canonicalURL) canonicalURL = window.location.href;
+	    //Assign script content. Replace current URL with the canonical URL
+      !function(){var e=/([http|https]:\/\/[a-zA-Z0-9\_\.]+\.baidu\.com)/gi,r=canonicalURL,t=document.referrer;if(!e.test(r)){var n=(String(curProtocol).toLowerCase() === 'https')?"https://sp0.baidu.com/9_Q4simg2RQJ8t7jm9iCKT-xh_/s.gif":"//api.share.baidu.com/s.gif";t?(n+="?r="+encodeURIComponent(document.referrer),r&&(n+="&l="+r)):r&&(n+="?l="+r);var i=new Image;i.src=n}}(window);})();
+  </script>
+
+
+
+
+  <script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+    <div id="pjax">
+  
+
+  
+
+<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.css">
+
+<script>
+NexT.utils.loadComments(document.querySelector('#gitalk-container'), () => {
+  NexT.utils.getScript('//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js', () => {
+    var gitalk = new Gitalk({
+      clientID    : 'a705189dfc18ec59a7d0',
+      clientSecret: '17415910b55e24cdb8c1c8d72bc992a0457f193b',
+      repo        : 'qingwave.github.io',
+      owner       : 'qingwave',
+      admin       : ['qingwave'],
+      id          : '2021-03-30T19-07-20',
+        language: '',
+      distractionFreeMode: true
+    });
+    gitalk.render('gitalk-container');
+  }, window.Gitalk);
+});
+</script>
+
+    </div>
+</body>
+</html>

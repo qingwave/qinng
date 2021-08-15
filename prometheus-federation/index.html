@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 3.9.0">
+  <link rel="icon" type="image/png" sizes="32x32" href="/medias/favicon.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/medias/favicon.png">
+  <meta name="google-site-verification" content="googledbe9fc5bea9bf603.html">
+  <meta name="baidu-site-verification" content="muFp3xopwC">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/all.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"qingwave.github.io","root":"/","scheme":"Mist","version":"7.8.0","exturl":false,"sidebar":{"position":"right","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":true,"show_result":true,"style":"default"},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":"gitalk","storage":true,"lazyload":false,"nav":null,"activeClass":"gitalk"},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},"path":"search.xml"};
+  </script>
+
+  <meta name="description" content="单个Prometheus Server可以轻松的处理数以百万的时间序列。但当机器规模过大时，需要对其进行分区，Prometheus也提供了集群联邦的功能，方便对其扩展。">
+<meta name="keywords" content="k8s,prometheus">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Prometheus分区实践">
+<meta property="og:url" content="https://qingwave.github.io/prometheus-federation/index.html">
+<meta property="og:site_name" content="Qinng">
+<meta property="og:description" content="单个Prometheus Server可以轻松的处理数以百万的时间序列。但当机器规模过大时，需要对其进行分区，Prometheus也提供了集群联邦的功能，方便对其扩展。">
+<meta property="og:locale" content="zh-CN">
+<meta property="og:image" content="https://qingwave.github.io/img/blogImg/federate1.png">
+<meta property="og:image" content="https://qingwave.github.io/img/blogImg/federate2.png">
+<meta property="og:image" content="https://qingwave.github.io/img/blogImg/federate3.png">
+<meta property="og:image" content="https://qingwave.github.io/img/blogImg/Promehtues-arch.png">
+<meta property="og:image" content="https://qingwave.github.io/img/blogImg/federate-plan.png">
+<meta property="og:updated_time" content="2021-08-12T01:18:39.073Z">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Prometheus分区实践">
+<meta name="twitter:description" content="单个Prometheus Server可以轻松的处理数以百万的时间序列。但当机器规模过大时，需要对其进行分区，Prometheus也提供了集群联邦的功能，方便对其扩展。">
+<meta name="twitter:image" content="https://qingwave.github.io/img/blogImg/federate1.png">
+
+<link rel="canonical" href="https://qingwave.github.io/prometheus-federation/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true,
+    lang   : 'zh-CN'
+  };
+</script>
+
+  <title>Prometheus分区实践 | Qinng</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+<link rel="stylesheet" href="/css/prism-tomorrow.css" type="text/css">
+<link rel="stylesheet" href="/css/prism-line-numbers.css" type="text/css"></head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <span class="logo-line-before"><i></i></span>
+      <h1 class="site-title">Qinng</h1>
+      <span class="logo-line-after"><i></i></span>
+    </a>
+      <p class="site-subtitle" itemprop="description">Qinng</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+
+<nav class="site-nav">
+  <ul id="menu" class="main-menu menu">
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i></a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i></a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup">
+        <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result">
+  <div id="no-result">
+    <i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content post posts-expand">
+            
+
+    
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="https://qingwave.github.io/prometheus-federation/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="Qinng">
+      <meta itemprop="description" content="Coding, Reading and Daydreaming">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="Qinng">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Prometheus分区实践
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-calendar"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2019-02-12 18:32:27" itemprop="dateCreated datePublished" datetime="2019-02-12T18:32:27+08:00">2019-02-12</time>
+            </span>
+              <span class="post-meta-item">
+                <span class="post-meta-item-icon">
+                  <i class="far fa-calendar-check"></i>
+                </span>
+                <span class="post-meta-item-text">更新于</span>
+                <time title="修改时间：2021-08-12 09:18:39" itemprop="dateModified" datetime="2021-08-12T09:18:39+08:00">2021-08-12</time>
+              </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="far fa-folder"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/cloud/" itemprop="url" rel="index"><span itemprop="name">cloud</span></a>
+                </span>
+            </span>
+
+          
+            <span class="post-meta-item" title="阅读次数" id="busuanzi_container_page_pv" style="display: none;">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-eye"></i>
+              </span>
+              <span class="post-meta-item-text">阅读次数：</span>
+              <span id="busuanzi_value_page_pv"></span>
+            </span>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <h2 id="背景"><a href="#背景" class="headerlink" title="背景"></a>背景</h2><p>单个Prometheus Server可以轻松的处理数以百万的时间序列。但当机器规模过大时，需要对其进行分区，Prometheus也提供了集群联邦的功能，方便对其扩展。</p>
+<p>我们采用Prometheus来监控k8s集群，节点数400，采集的samples是280w，Prometheus官方的显示每秒可抓取10w samples。当集群规模扩大到上千节点时，单个Prometheus不足以处理大量数据，需要对其进行分区。</p>
+<blockquote>
+<p>可以根据<code>scrape_samples_scraped{job=${JOBNAME}}</code>来统计各个job的samples数目<br>可以根据<code>count({__name__=~&quot;.*:.*&quot;})</code>来统计metrics总数</p>
+</blockquote>
+<h2 id="集群联邦"><a href="#集群联邦" class="headerlink" title="集群联邦"></a>集群联邦</h2><p>在Promehtues的源码中，<code>federate</code>联邦功能在<code>web</code>中，是一个特殊的查询接口，允许一个prometheus抓取另一个prometheus的metrics</p>
+<p>可以通过全局的prometheus抓取其他slave prometheus从而达到分区的目的<br><img src="/img/blogImg/federate1.png" alt="federate"></p>
+<p>使用federate进行分区通过有两种方式</p>
+<h3 id="功能分区"><a href="#功能分区" class="headerlink" title="功能分区"></a>功能分区</h3><p>每个模块为一个分区，如node-exporter为一个分区，kube-state-metrics为一个分区，再使用全局的Prometheus汇总<br><img src="/img/blogImg/federate2.png" alt="federate by job"></p>
+<p>实现简单，但当单个job采集任务过大（如node-exporter）时，单个Prometheus slave也会成为瓶颈</p>
+<h3 id="水平扩展"><a href="#水平扩展" class="headerlink" title="水平扩展"></a>水平扩展</h3><p>针对功能分区的不足，将同一任务的不同实例的监控数据采集任务划分到不同的Prometheus实例。通过relabel设置，我们可以确保当前Prometheus Server只收集当前采集任务的一部分实例的监控指标。<br><img src="/img/blogImg/federate3.png" alt="federate by modulus"></p>
+<p>下为官方提供的配置</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">global:</span></span><br><span class="line"><span class="attr">  external_labels:</span></span><br><span class="line"><span class="attr">    slave:</span> <span class="number">1</span>  <span class="comment"># This is the 2nd slave. This prevents clashes between slaves.</span></span><br><span class="line"><span class="attr">scrape_configs:</span></span><br><span class="line"><span class="attr">  - job_name:</span> <span class="string">some_job</span></span><br><span class="line">    <span class="comment"># Add usual service discovery here, such as static_configs</span></span><br><span class="line"><span class="attr">    relabel_configs:</span></span><br><span class="line"><span class="attr">    - source_labels:</span> <span class="string">[__address__]</span></span><br><span class="line"><span class="attr">      modulus:</span>       <span class="number">4</span>    <span class="comment"># 4 slaves</span></span><br><span class="line"><span class="attr">      target_label:</span>  <span class="string">__tmp_hash</span></span><br><span class="line"><span class="attr">      action:</span>        <span class="string">hashmod</span></span><br><span class="line"><span class="attr">    - source_labels:</span> <span class="string">[__tmp_hash]</span></span><br><span class="line"><span class="attr">      regex:</span>         <span class="string">^1$</span>  <span class="comment"># This is the 2nd slave</span></span><br><span class="line"><span class="attr">      action:</span>        <span class="string">keep</span></span><br></pre></td></tr></table></figure>
+<p>并且通过当前数据中心的一个中心Prometheus Server将监控数据进行聚合到任务级别。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">- scrape_config:</span></span><br><span class="line"><span class="attr">  - job_name:</span> <span class="string">slaves</span></span><br><span class="line"><span class="attr">    honor_labels:</span> <span class="literal">true</span></span><br><span class="line"><span class="attr">    metrics_path:</span> <span class="string">/federate</span></span><br><span class="line"><span class="attr">    params:</span></span><br><span class="line">      <span class="string">match[]:</span></span><br><span class="line"><span class="bullet">        -</span> <span class="string">'&#123;__name__=~"^slave:.*"&#125;'</span>   <span class="comment"># Request all slave-level time series</span></span><br><span class="line"><span class="attr">    static_configs:</span></span><br><span class="line"><span class="attr">      - targets:</span></span><br><span class="line"><span class="attr">        - slave0:</span><span class="number">9090</span></span><br><span class="line"><span class="attr">        - slave1:</span><span class="number">9090</span></span><br><span class="line"><span class="attr">        - slave3:</span><span class="number">9090</span></span><br><span class="line"><span class="attr">        - slave4:</span><span class="number">9090</span></span><br></pre></td></tr></table></figure>
+<p>水平扩展，即通过联邦集群的特性在任务的实例级别对Prometheus采集任务进行划分，以支持规模的扩展。</p>
+<h2 id="我们的方案"><a href="#我们的方案" class="headerlink" title="我们的方案"></a>我们的方案</h2><h3 id="整体架构"><a href="#整体架构" class="headerlink" title="整体架构"></a>整体架构</h3><ul>
+<li>Promehtues以容器化的方式部署在k8s集群中</li>
+<li>收集node-exporter、cadvisor、kubelet、kube-state-metrics、k8s核心组件、自定义metrics</li>
+<li>通过实现opentsdb-adapter，对监控数据做持久化</li>
+<li>通过falcon-adapter,为监控数据提供报警<br><img src="/img/blogImg/Promehtues-arch.png" alt="monitor"></li>
+</ul>
+<h3 id="分区方案"><a href="#分区方案" class="headerlink" title="分区方案"></a>分区方案</h3><ul>
+<li>Prometheus分区包括master Prometheus 与 slave Promehtues</li>
+<li>我们将监控数据分为多个层次: cluster, namespace, deployment/daemonset, pod, node</li>
+<li>由于kubelet, node-exporter, cadvisor等是以node为单位采集的，所以安装node节点来划分不同job</li>
+<li>slave Prometheus 按照node切片采集node，pod级别数据</li>
+<li>kube-state-metrics暂时无法切片，可通过replicaset 设置多个，单独作为一个kube-state Prometheus，供其他slave Prometheus采集</li>
+<li>其他etcd, apiserver等自定义组件可通过master Promehtues直接采集</li>
+</ul>
+<p>整体架构如下<br><img src="/img/blogImg/federate-plan.png" alt="federate-plan"></p>
+<p>master Prometheus配置</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">global:</span></span><br><span class="line"><span class="attr">  scrape_interval:</span> <span class="number">60</span><span class="string">s</span></span><br><span class="line"><span class="attr">  scrape_timeout:</span> <span class="number">30</span><span class="string">s</span></span><br><span class="line"><span class="attr">  evaluation_interval:</span> <span class="number">60</span><span class="string">s</span></span><br><span class="line"><span class="attr">  external_labels:</span></span><br><span class="line"><span class="attr">    cluster:</span> <span class="string">&#123;&#123;CLUSTER&#125;&#125;</span></span><br><span class="line"><span class="attr">    production_environment:</span> <span class="string">&#123;&#123;ENV&#125;&#125;</span></span><br><span class="line"></span><br><span class="line"><span class="attr">rule_files:</span></span><br><span class="line"><span class="bullet">-</span> <span class="string">cluster.yml</span></span><br><span class="line"><span class="bullet">-</span> <span class="string">namespace.yml</span></span><br><span class="line"><span class="bullet">-</span> <span class="string">deployment.yml</span></span><br><span class="line"><span class="bullet">-</span> <span class="string">daemonset.yml</span></span><br><span class="line"></span><br><span class="line"><span class="attr">scrape_configs:</span></span><br><span class="line"></span><br><span class="line"><span class="attr">- job_name:</span> <span class="string">federate-slave</span></span><br><span class="line"><span class="attr">  honor_labels:</span> <span class="literal">true</span></span><br><span class="line"><span class="attr">  metrics_path:</span> <span class="string">'/federate'</span></span><br><span class="line"><span class="attr">  params:</span></span><br><span class="line">    <span class="string">'match[]'</span><span class="string">:</span></span><br><span class="line"><span class="bullet">      -</span> <span class="string">'&#123;__name__=~"pod:.*|node:.*"&#125;'</span></span><br><span class="line"><span class="attr">  kubernetes_sd_configs:</span></span><br><span class="line"><span class="attr">  - role:</span> <span class="string">pod</span></span><br><span class="line"><span class="attr">    namespaces:</span></span><br><span class="line"><span class="attr">      names:</span></span><br><span class="line"><span class="bullet">      -</span> <span class="string">kube-system</span></span><br><span class="line"><span class="attr">  relabel_configs:</span></span><br><span class="line"><span class="attr">  - source_labels:</span></span><br><span class="line"><span class="bullet">    -</span> <span class="string">__meta_kubernetes_pod_label_app</span></span><br><span class="line"><span class="attr">    action:</span> <span class="string">keep</span></span><br><span class="line"><span class="attr">    regex:</span> <span class="string">prometheus-slave.*</span></span><br><span class="line"><span class="attr">  - source_labels:</span></span><br><span class="line"><span class="bullet">    -</span> <span class="string">__meta_kubernetes_pod_container_port_number</span></span><br><span class="line"><span class="attr">    action:</span> <span class="string">keep</span></span><br><span class="line"><span class="attr">    regex:</span> <span class="number">9090</span></span><br><span class="line"></span><br><span class="line"><span class="attr">- job_name:</span> <span class="string">federate-kubestate</span></span><br><span class="line"><span class="attr">  honor_labels:</span> <span class="literal">true</span></span><br><span class="line"><span class="attr">  metrics_path:</span> <span class="string">'/federate'</span></span><br><span class="line"><span class="attr">  params:</span></span><br><span class="line">    <span class="string">'match[]'</span><span class="string">:</span></span><br><span class="line"><span class="bullet">      -</span> <span class="string">'&#123;__name__=~"deployment:.*|daemonset:.*"&#125;'</span></span><br><span class="line"><span class="attr">  kubernetes_sd_configs:</span></span><br><span class="line"><span class="attr">  - role:</span> <span class="string">pod</span></span><br><span class="line"><span class="attr">    namespaces:</span></span><br><span class="line"><span class="attr">      names:</span></span><br><span class="line"><span class="bullet">      -</span> <span class="string">kube-system</span></span><br><span class="line"><span class="attr">  relabel_configs:</span></span><br><span class="line"><span class="attr">  - source_labels:</span></span><br><span class="line"><span class="bullet">    -</span> <span class="string">__meta_kubernetes_pod_label_app</span></span><br><span class="line"><span class="attr">    action:</span> <span class="string">keep</span></span><br><span class="line"><span class="attr">    regex:</span> <span class="string">prometheus-kubestate.*</span></span><br><span class="line"><span class="attr">  - source_labels:</span></span><br><span class="line"><span class="bullet">    -</span> <span class="string">__meta_kubernetes_pod_container_port_number</span></span><br><span class="line"><span class="attr">    action:</span> <span class="string">keep</span></span><br><span class="line"><span class="attr">    regex:</span> <span class="number">9090</span></span><br></pre></td></tr></table></figure>
+<p>slave Prometheus配置</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">global:</span></span><br><span class="line"><span class="attr">  scrape_interval:</span> <span class="number">60</span><span class="string">s</span></span><br><span class="line"><span class="attr">  scrape_timeout:</span> <span class="number">30</span><span class="string">s</span></span><br><span class="line"><span class="attr">  evaluation_interval:</span> <span class="number">60</span><span class="string">s</span></span><br><span class="line"><span class="attr">  external_labels:</span></span><br><span class="line"><span class="attr">    cluster:</span> <span class="string">&#123;&#123;CLUSTER&#125;&#125;</span></span><br><span class="line"><span class="attr">    production_environment:</span> <span class="string">&#123;&#123;ENV&#125;&#125;</span></span><br><span class="line"></span><br><span class="line"><span class="attr">rule_files:</span></span><br><span class="line"><span class="bullet">-</span> <span class="string">node.yml</span></span><br><span class="line"><span class="bullet">-</span> <span class="string">pod.yml</span></span><br><span class="line"></span><br><span class="line"><span class="attr">scrape_configs:</span></span><br><span class="line"></span><br><span class="line"><span class="attr">- job_name:</span> <span class="string">federate-kubestate</span></span><br><span class="line"><span class="attr">  honor_labels:</span> <span class="literal">true</span></span><br><span class="line"><span class="attr">  metrics_path:</span> <span class="string">'/federate'</span></span><br><span class="line"><span class="attr">  params:</span></span><br><span class="line">    <span class="string">'match[]'</span><span class="string">:</span></span><br><span class="line"><span class="bullet">      -</span> <span class="string">'&#123;__name__=~"pod:.*|node:.*"&#125;'</span></span><br><span class="line"><span class="attr">  kubernetes_sd_configs:</span></span><br><span class="line"><span class="attr">  - role:</span> <span class="string">pod</span></span><br><span class="line"><span class="attr">    namespaces:</span></span><br><span class="line"><span class="attr">      names:</span></span><br><span class="line"><span class="bullet">      -</span> <span class="string">kube-system</span></span><br><span class="line"><span class="attr">  relabel_configs:</span></span><br><span class="line"><span class="attr">  - source_labels:</span></span><br><span class="line"><span class="bullet">    -</span> <span class="string">__meta_kubernetes_pod_label_app</span></span><br><span class="line"><span class="attr">    action:</span> <span class="string">keep</span></span><br><span class="line"><span class="attr">    regex:</span> <span class="string">prometheus-kubestate.*</span></span><br><span class="line"><span class="attr">  - source_labels:</span></span><br><span class="line"><span class="bullet">    -</span> <span class="string">__meta_kubernetes_pod_container_port_number</span></span><br><span class="line"><span class="attr">    action:</span> <span class="string">keep</span></span><br><span class="line"><span class="attr">    regex:</span> <span class="number">9090</span></span><br><span class="line"><span class="attr">  metric_relabel_configs:</span></span><br><span class="line"><span class="attr">  - source_labels:</span> <span class="string">[node]</span></span><br><span class="line"><span class="attr">    modulus:</span>       <span class="string">&#123;&#123;MODULES&#125;&#125;</span></span><br><span class="line"><span class="attr">    target_label:</span>  <span class="string">__tmp_hash</span></span><br><span class="line"><span class="attr">    action:</span>        <span class="string">hashmod</span></span><br><span class="line"><span class="attr">  - source_labels:</span> <span class="string">[__tmp_hash]</span></span><br><span class="line"><span class="attr">    regex:</span>         <span class="string">&#123;&#123;SLAVEID&#125;&#125;</span></span><br><span class="line"><span class="attr">    action:</span>        <span class="string">keep</span></span><br><span class="line"></span><br><span class="line"><span class="attr">- job_name:</span> <span class="string">kubelet</span></span><br><span class="line"><span class="attr">  scheme:</span> <span class="string">https</span></span><br><span class="line"><span class="attr">  kubernetes_sd_configs:</span></span><br><span class="line"><span class="attr">  - role:</span> <span class="string">node</span></span><br><span class="line"><span class="attr">    namespaces:</span></span><br><span class="line"><span class="attr">      names:</span> <span class="string">[]</span></span><br><span class="line"><span class="attr">  tls_config:</span></span><br><span class="line"><span class="attr">    insecure_skip_verify:</span> <span class="literal">true</span></span><br><span class="line"><span class="attr">  relabel_configs:</span></span><br><span class="line"><span class="attr">  - source_labels:</span> <span class="string">[]</span></span><br><span class="line"><span class="attr">    regex:</span> <span class="string">__meta_kubernetes_node_label_(.+)</span></span><br><span class="line"><span class="attr">    replacement:</span> <span class="string">"$1"</span></span><br><span class="line"><span class="attr">    action:</span> <span class="string">labelmap</span></span><br><span class="line"><span class="attr">  - source_labels:</span> <span class="string">[__meta_kubernetes_node_label_kubernetes_io_hostname]</span></span><br><span class="line"><span class="attr">    modulus:</span>       <span class="string">&#123;&#123;MODULES&#125;&#125;</span></span><br><span class="line"><span class="attr">    target_label:</span>  <span class="string">__tmp_hash</span></span><br><span class="line"><span class="attr">    action:</span>        <span class="string">hashmod</span></span><br><span class="line"><span class="attr">  - source_labels:</span> <span class="string">[__tmp_hash]</span></span><br><span class="line"><span class="attr">    regex:</span>         <span class="string">&#123;&#123;SLAVEID&#125;&#125;</span></span><br><span class="line"><span class="attr">    action:</span>        <span class="string">keep</span></span><br><span class="line"></span><br><span class="line"><span class="attr">- job_name:</span> <span class="string">...</span></span><br></pre></td></tr></table></figure>
+<h3 id="可能的问题"><a href="#可能的问题" class="headerlink" title="可能的问题"></a>可能的问题</h3><ul>
+<li>如何部署，配置复杂，现在采用shell脚本加kustomize,是否有更简单的方法</li>
+<li>分区的动态扩展随着node的规模</li>
+<li>kube-state-metrics是否会成为瓶颈，目前的<a href="https://docs.google.com/document/d/1hm5XrM9dYYY085yOnmMDXu074E4RxjM7R5FS4-WOflo/edit" target="_blank" rel="noopener">kube-state-metrics性能测试</a></li>
+<li>由于分区同一个job的不同instance采集的时间有偏差，对聚合有一定影响</li>
+<li>可靠性保证，如果一个或多个slave的挂了如何处理，使用k8s来保证prometheus的可用性是否可靠</li>
+</ul>
+
+    </div>
+
+    
+    
+    
+        
+
+<div>
+<ul class="post-copyright">
+  <li class="post-copyright-author">
+    <strong>本文作者： </strong>Qinng
+  </li>
+  <li class="post-copyright-link">
+    <strong>本文链接：</strong>
+    <a href="https://qingwave.github.io/prometheus-federation/" title="Prometheus分区实践">https://qingwave.github.io/prometheus-federation/</a>
+  </li>
+  <li class="post-copyright-license">
+    <strong>版权声明： </strong>本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" rel="noopener" target="_blank"><i class="fab fa-fw fa-creative-commons"></i>BY-NC-SA</a> 许可协议。转载请注明出处！
+  </li>
+</ul>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/k8s/" rel="tag"># k8s</a>
+              <a href="/tags/prometheus/" rel="tag"># prometheus</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/openssl-cmd/" rel="prev" title="openssl常用命令">
+      <i class="fa fa-chevron-left"></i> openssl常用命令
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/festival/" rel="next" title="回家">
+      回家 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+
+
+          </div>
+          
+    <div class="comments" id="gitalk-container"></div>
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#背景"><span class="nav-number">1.</span> <span class="nav-text">背景</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#集群联邦"><span class="nav-number">2.</span> <span class="nav-text">集群联邦</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#功能分区"><span class="nav-number">2.1.</span> <span class="nav-text">功能分区</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#水平扩展"><span class="nav-number">2.2.</span> <span class="nav-text">水平扩展</span></a></li></ol></li><li class="nav-item nav-level-2"><a class="nav-link" href="#我们的方案"><span class="nav-number">3.</span> <span class="nav-text">我们的方案</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#整体架构"><span class="nav-number">3.1.</span> <span class="nav-text">整体架构</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#分区方案"><span class="nav-number">3.2.</span> <span class="nav-text">分区方案</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#可能的问题"><span class="nav-number">3.3.</span> <span class="nav-text">可能的问题</span></a></li></ol></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">Qinng</p>
+  <div class="site-description" itemprop="description">Coding, Reading and Daydreaming</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">53</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">27</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+  <div class="links-of-author motion-element">
+      <span class="links-of-author-item">
+        <a href="https://github.com/qingwave" title="GitHub → https://github.com/qingwave" rel="noopener" target="_blank"><i class="fab fa-github fa-fw"></i></a>
+      </span>
+      <span class="links-of-author-item">
+        <a href="mailto:isguory@gmail.com" title="E-Mail → mailto:isguory@gmail.com" rel="noopener" target="_blank"><i class="fa fa-envelope fa-fw"></i></a>
+      </span>
+      <span class="links-of-author-item">
+        <a href="/contact" title="Contact → /contact"><i class="fab fa-flipboard fa-fw"></i></a>
+      </span>
+  </div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+        
+
+<div class="copyright">
+  
+  &copy; 2018 – 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-terminal"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">Qinng</span>
+</div>
+
+        
+<div class="busuanzi-count">
+  <script data-pjax async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+    <span class="post-meta-item" id="busuanzi_container_site_uv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-user"></i>
+      </span>
+      <span class="site-uv" title="总访客量">
+        <span id="busuanzi_value_site_uv"></span>
+      </span>
+    </span>
+    <span class="post-meta-divider">|</span>
+    <span class="post-meta-item" id="busuanzi_container_site_pv" style="display: none;">
+      <span class="post-meta-item-icon">
+        <i class="fa fa-eye"></i>
+      </span>
+      <span class="site-pv" title="总访问量">
+        <span id="busuanzi_value_site_pv"></span>
+      </span>
+    </span>
+</div>
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/pjax/pjax.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+<script src="/js/utils.js"></script><script src="/js/motion.js"></script>
+<script src="/js/schemes/muse.js"></script>
+<script src="/js/next-boot.js"></script>
+  <script>
+var pjax = new Pjax({
+  selectors: [
+    'head title',
+    '#page-configurations',
+    '.content-wrap',
+    '.post-toc-wrap',
+    '.languages',
+    '#pjax'
+  ],
+  switches: {
+    '.post-toc-wrap': Pjax.switches.innerHTML
+  },
+  analytics: false,
+  cacheBust: false,
+  scrollTo : !CONFIG.bookmark.enable
+});
+
+window.addEventListener('pjax:success', () => {
+  document.querySelectorAll('script[data-pjax], script#page-configurations, #pjax script').forEach(element => {
+    var code = element.text || element.textContent || element.innerHTML || '';
+    var parent = element.parentNode;
+    parent.removeChild(element);
+    var script = document.createElement('script');
+    if (element.id) {
+      script.id = element.id;
+    }
+    if (element.className) {
+      script.className = element.className;
+    }
+    if (element.type) {
+      script.type = element.type;
+    }
+    if (element.src) {
+      script.src = element.src;
+      // Force synchronous loading of peripheral JS.
+      script.async = false;
+    }
+    if (element.dataset.pjax !== undefined) {
+      script.dataset.pjax = '';
+    }
+    if (code !== '') {
+      script.appendChild(document.createTextNode(code));
+    }
+    parent.appendChild(script);
+  });
+  NexT.boot.refresh();
+  // Define Motion Sequence & Bootstrap Motion.
+  if (CONFIG.motion.enable) {
+    NexT.motion.integrator
+      .init()
+      .add(NexT.motion.middleWares.subMenu)
+      .add(NexT.motion.middleWares.postList)
+      .bootstrap();
+  }
+  NexT.utils.updateSidebarPosition();
+});
+</script>
+
+
+
+
+  
+  <script data-pjax>
+    (function(){
+      var canonicalURL, curProtocol;
+      //Get the <link> tag
+      var x=document.getElementsByTagName("link");
+		//Find the last canonical URL
+		if(x.length > 0){
+			for (i=0;i<x.length;i++){
+				if(x[i].rel.toLowerCase() == 'canonical' && x[i].href){
+					canonicalURL=x[i].href;
+				}
+			}
+		}
+    //Get protocol
+	    if (!canonicalURL){
+	    	curProtocol = window.location.protocol.split(':')[0];
+	    }
+	    else{
+	    	curProtocol = canonicalURL.split(':')[0];
+	    }
+      //Get current URL if the canonical URL does not exist
+	    if (!canonicalURL) canonicalURL = window.location.href;
+	    //Assign script content. Replace current URL with the canonical URL
+      !function(){var e=/([http|https]:\/\/[a-zA-Z0-9\_\.]+\.baidu\.com)/gi,r=canonicalURL,t=document.referrer;if(!e.test(r)){var n=(String(curProtocol).toLowerCase() === 'https')?"https://sp0.baidu.com/9_Q4simg2RQJ8t7jm9iCKT-xh_/s.gif":"//api.share.baidu.com/s.gif";t?(n+="?r="+encodeURIComponent(document.referrer),r&&(n+="&l="+r)):r&&(n+="?l="+r);var i=new Image;i.src=n}}(window);})();
+  </script>
+
+
+
+
+  <script src="/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+    <div id="pjax">
+  
+
+  
+
+<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.css">
+
+<script>
+NexT.utils.loadComments(document.querySelector('#gitalk-container'), () => {
+  NexT.utils.getScript('//cdn.jsdelivr.net/npm/gitalk@1/dist/gitalk.min.js', () => {
+    var gitalk = new Gitalk({
+      clientID    : 'a705189dfc18ec59a7d0',
+      clientSecret: '17415910b55e24cdb8c1c8d72bc992a0457f193b',
+      repo        : 'qingwave.github.io',
+      owner       : 'qingwave',
+      admin       : ['qingwave'],
+      id          : '2019-02-12T18-32-27',
+        language: '',
+      distractionFreeMode: true
+    });
+    gitalk.render('gitalk-container');
+  }, window.Gitalk);
+});
+</script>
+
+    </div>
+</body>
+</html>
