@@ -1,9 +1,9 @@
 server:
-	sleep 5 && x-www-browser "http://localhost:4000" &
-	hexo s
+	hexo s -p 4444
 
 init:
 	git submodule update --init --recursive
+	npm install -g hexo-cli
 	npm install
 
 clean:
